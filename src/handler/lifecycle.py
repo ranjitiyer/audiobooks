@@ -7,7 +7,8 @@ class LaunchRequestHandler(AbstractRequestHandler):
         return is_request_type("LaunchRequest")(handler_input)
 
     def handle(self, handler_input):
-        speech_text = "Welcome to the skill, you can say hello!"
+        speech_text = "Welcome to Librivox on Amazon Echo. You can say Play a book, " \
+                      "or say, Play title, followed by the title name."
 
         handler_input.response_builder.speak(speech_text) \
             .set_should_end_session(False)

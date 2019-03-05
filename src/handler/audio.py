@@ -1,5 +1,6 @@
 from ask_sdk_core.dispatch_components import AbstractRequestHandler
 from ask_sdk_core.utils import is_request_type, is_intent_name
+from ask_sdk_model import Slot
 from ask_sdk_model.interfaces.audioplayer import PlayDirective, AudioItem, \
     Stream, StopDirective
 from ask_sdk_model.ui import PlayBehavior
@@ -72,20 +73,21 @@ class PlayTitleIntent(AbstractRequestHandler):
         log_context(handler_input)
 
         # get the slot
-        slots = handler_input.request_envelope.request.intents.slots
+        slots = handler_input.request_envelope.request.intent.slots
         if 'title' in slots:
-            title = slots['title']
+            slot: Slot = slots['title']
+            title = slot.value
 
             # set title attribute
-            set_attribute('title', title)
+            set_attribute(handler_input, 'title', title)
 
-            # set dialog_sequence
-            set_dialog_sequence_title('title_confirmation')
+            # Search for the book
+            book = next(awsutils.get_book_by_title(title))
 
-            # ask for confirmation
-            speech = reprompt = 'Did you say {}?'.format(title)
-            handler_input.response_builder.speak(speech).ask(reprompt)
-            return handler_input.response_builder.response
+            logger.info("Book found {}".format(book))
+
+            # get the book by title and play it
+            return play_book(handler_input, book)
 
 """
 Utility function to play audio

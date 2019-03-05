@@ -130,6 +130,6 @@ def get_book_by_title(title):
 
 if __name__ == '__main__':
     print("Running queries")
-    recs = query_by_title('of')
+    recs = query_by_title('secret garden')
     for rec in recs:
         print(rec)

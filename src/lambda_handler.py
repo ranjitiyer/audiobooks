@@ -3,7 +3,7 @@ from ask_sdk_core.skill_builder import SkillBuilder
 from src.handler.audio import ExceptionEncounteredHandler, PauseIntentHandler, \
     PlayIntentHandler, PlaybackFinishedHandler, PlaybackStoppedHandler, \
     PlaybackNearlyFinishedHandler, PlaybackStartedHandler, \
-    PlaybackFailedHandler, ResumeHandler
+    PlaybackFailedHandler, ResumeHandler, PlayTitleIntent
 from src.handler.lifecycle import LaunchRequestHandler, HelpIntentHandler, \
     CancelAndStopIntentHandler, SessionEndedIntentHandler, \
     GreetingIntentHandler, LoggingRequestInterceptor, AllExceptionHandler
@@ -17,6 +17,7 @@ sb.add_request_handler(CancelAndStopIntentHandler())
 sb.add_request_handler(SessionEndedIntentHandler())
 sb.add_request_handler(GreetingIntentHandler())
 sb.add_request_handler(PauseIntentHandler())
+sb.add_request_handler(PlayTitleIntent())
 
 sb.add_request_handler(PlayIntentHandler())
 sb.add_request_handler(PlaybackFinishedHandler())
