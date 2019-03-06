@@ -15,6 +15,8 @@ import sys
 from queue import Queue
 import threading
 
+import io
+
 from src.loader.exporter import S3Exporter
 
 TWO_DIGITS = '.*(\d\d).*'
@@ -24,7 +26,6 @@ TAG_RE = re.compile(HTML_TAGS)
 section_num_pattern = re.compile(TWO_DIGITS)
 
 exporter = S3Exporter()
-
 
 def get_book_metadata(id):
     url = 'https://librivox.org/api/feed/audiobooks'
@@ -121,8 +122,9 @@ def get_sections(ia_id):
                     'url': abs_url.replace("http", "https")
                 }
             else:
-                print("WARN: Unable to parse section number for {}".format(
-                    section_name))
+                #print("WARN: Unable to parse section number for {}".format(
+                    # section_name))
+                pass
     return sections
 
 
@@ -135,16 +137,15 @@ def normalize_authors(book):
         if author['last_name']:
             full_name += author['last_name']
         # add full name
-        authors.append(full_name)
+        authors.append(full_name.lower())
     return authors
-
 
 # TODO
 def normalize_genres(book):
     genres = []
     for genre in book.genres.getchildren():
         if genre['name']:
-            genres.append(str(genre['name']))
+            genres.append(str(genre['name']).lower())
     return genres
 
 
@@ -161,7 +162,6 @@ workQ = Queue()
 resultQ = Queue()
 threads = []
 
-
 def worker():
     while True:
         book = workQ.get()
@@ -171,62 +171,77 @@ def worker():
             print("Starting {} ".format(book.id))
             ia_id = find_ia_id_from_title(book.title)
             sections = get_sections(ia_id)
-            authors = normalize_authors(book)
-            genres = normalize_genres(book)
-
-            book_json = {
-                'id': int(book.id),
-                'title': str(book.title.text),
-                'description': TAG_RE.sub('', str(book.description.text)),
-                'num_sections': int(book.num_sections),
-                'sections': sections,
-                'authors': authors,
-                'genres': genres,
-                'totaltime': str(book.totaltime)
-            }
-            resultQ.put(json.dumps(book_json))
+            if len(sections) > 0:
+                authors = normalize_authors(book)
+                genres = normalize_genres(book)
+                book_json = {
+                    'id': int(book.id),
+                    'title': str(book.title.text).lower(),
+                    'description': TAG_RE.sub('', str(book.description.text)),
+                    'num_sections': int(book.num_sections),
+                    'sections': sections,
+                    'authors': authors,
+                    'genres': genres,
+                    'totaltime': str(book.totaltime)
+                }
+                resultQ.put(json.dumps(book_json))
+            else:
+                print("Unable to process sections for ia_id book {}".format(ia_id))
             print("Completed {} ".format(book.id))
 
         workQ.task_done()
 
 
-limit = 100
-offset = 0
-num_threads = 2
-if sys.argv[1]:
-    limit = sys.argv[1]
-if sys.argv[2]:
-    offset = sys.argv[2]
-if sys.argv[3]:
-    num_threads = int(sys.argv[3])
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Creates a JSON database of book downloaded from Librivox and uploads them to S3')
 
-# get all books
-books = get_books(limit, offset)
+    parser.add_argument('--offset', help='starting offset when searching librivox', type=int, default=0)
+    parser.add_argument('--limit', help='number of records to obtain in each request', type=int, default=10)
+    parser.add_argument('--threads', help='number of threads to use in the processing', type=int, default=2)
+    parser.add_argument('--dryrun', help='write to local file, don\'t upload to s3', action='store_true')
 
-print("got books")
+    parsed_args = parser.parse_args()
 
-for i in range(num_threads):
-    t = threading.Thread(target=worker)
-    t.start()
-    threads.append(t)
+    print(parsed_args)
 
-print("created threads")
+    limit = parsed_args.limit
+    offset = parsed_args.offset
+    num_threads = parsed_args.threads
 
-for book in books.getchildren():
-    workQ.put(book)
+    # get books
+    books = get_books(limit, offset)
 
-# block until all done
-workQ.join()
+    print("number of books")
 
-# stop workers
-for i in range(num_threads):
-    workQ.put(None)
-for t in threads:
-    t.join()
+    for i in range(num_threads):
+        t = threading.Thread(target=worker)
+        t.start()
+        threads.append(t)
 
-books_json = ''
-while not resultQ.empty():
-    books_json += resultQ.get() + '\n'
-books_json = books_json.rstrip()
+    print("created threads")
 
-exporter.export(books_json)
+    for book in books.getchildren():
+        print(book.id)
+        workQ.put(book)
+
+    # block until all done
+    workQ.join()
+
+    # stop workers
+    for i in range(num_threads):
+        workQ.put(None)
+    for t in threads:
+        t.join()
+
+    books_json = ''
+    while not resultQ.empty():
+        books_json += resultQ.get() + '\n'
+    books_json = books_json.rstrip()
+
+    if not parsed_args.dryrun:
+        print("Writing to S3")
+        exporter.export(books_json)
+    else:
+        print("Wrting to local file")
+        with io.open("books.json", 'w') as f:
+            f.write(books_json)
