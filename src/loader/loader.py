@@ -1,4 +1,5 @@
 from json import JSONDecodeError
+from urllib.parse import ParseResult
 
 import requests
 #from lxml import etree, objectify
@@ -17,13 +18,21 @@ import threading
 
 import io
 
+from lxml.objectify import StringElement
+
 from src.loader.exporter import S3Exporter
 
-TWO_DIGITS = '.*(\d\d).*'
 HTML_TAGS = r'<[^>]+>'
-
 TAG_RE = re.compile(HTML_TAGS)
+
+TWO_DIGITS = '.*(\d\d).*'
 section_num_pattern = re.compile(TWO_DIGITS)
+
+CHAPTER_NUMBER = 'Chapter (\d?\d)'
+chapter_num_pattern = re.compile(CHAPTER_NUMBER)
+
+CHAPTERS_NUMBER = 'Chapters (\d?\d)'
+chapters_num_pattern = re.compile(CHAPTER_NUMBER)
 
 exporter = S3Exporter()
 
@@ -56,24 +65,38 @@ def is_librivox(doc):
     return False
 
 
-def find_ia_id_from_title(title):
-    try:
-        _params = {'q': title, 'fl[]': 'identifier', 'page': 1, 'output': 'json'}
-        url = 'https://archive.org/advancedsearch.php'
-        response = requests.get(url, params=_params)
-        _json = json.loads(response.content)
-        docs = _json['response']['docs']
-        lib_docs = list(filter(is_librivox, docs))
-        if len(lib_docs) > 0:
-            # Testing all potential librivox ids until a valid one is found
-            for doc in lib_docs:
-                if is_id_valid(doc['identifier']):
-                    return doc['identifier']
-        print('{} is not a valid Librivox book'.format(title))
-    except JSONDecodeError as e:
-        print('Invalid JSON response for book {}'.format(title))
-        return None
+# url_iarchive
+# http://www.archive.org/details/being_earnest_librivox
 
+def find_ia_id_from_title(book):
+    title = book.title
+
+    # check if its available in librivox meta-data
+    from urllib.parse import urlsplit
+    url = book.url_iarchive
+    if url:
+        parse_result: ParseResult = urlsplit(url.text)
+        ia_id = parse_result.path.rsplit('/')[-1]
+        return ia_id
+    else:
+        # get it the hard way
+        try:
+            _params = {'q': title, 'fl[]': 'identifier', 'page': 1, 'output': 'json'}
+            url = 'https://archive.org/advancedsearch.php'
+            response = requests.get(url, params=_params)
+            _json = json.loads(response.content)
+            docs = _json['response']['docs']
+            lib_docs = list(filter(is_librivox, docs))
+            if len(lib_docs) > 0:
+                # Testing all potential librivox ids until a valid one is found
+                for doc in lib_docs:
+                    if is_id_valid(doc['identifier']):
+                        return doc['identifier']
+            print('{} is not a valid Librivox book'.format(title))
+            raise Exception("Error processing book {} ".format(title))
+        except JSONDecodeError as e:
+            print('Invalid JSON response for book {}'.format(title))
+            raise e
 
 # Validate if ID is valid
 # new_alice_in_the_old_wonderland_1603_librivox
@@ -102,48 +125,65 @@ def get_ia_file_server_base_path(ia_id):
         _dir = _json['dir']
         return {'server': _server, 'dir': _dir}
     except JSONDecodeError as e:
-        print(response.content)
+        #print(response.content)
         print(e)
 
 # Build section mp3 dict
 def get_sections(ia_id):
-    # get file server base path
-    path = get_ia_file_server_base_path(ia_id)
-
     # find section mp3 names
     sections = {}
-    url = "http://archive.org/metadata/{}/files".format(ia_id)
-    response = requests.get(url)
-    _json = json.loads(response.content)
-    results = _json['result']
-    for result in results:
-        if result['name'].endswith('_64kb.mp3'):
-            file_name = result['name']
-            # section name
-            if not result['title'] is None:
-                section_name = result['title']
-            else:
-                section_name = file_name
-            # section url
-            abs_url = "http://{}{}/{}".format(path['server'], path['dir'],
-                                              file_name)
+    try:
+        # get file server base path
+        path = get_ia_file_server_base_path(ia_id)
 
-            # extract section number from name
-            # Ex: 11 - Chapter XI: The Tweedles
-            # Ex: 01 - Chapter I: Peggy the Pig
-            match = section_num_pattern.match(section_name)
-            if match:
-                sections[int(match.group(1))] = {
-                    'number': int(match.group(1)),
-                    'name': section_name,
-                    'url': abs_url.replace("http", "https")
-                }
-            else:
-                print("WARN: Unable to parse section number for {}".format(
-                    section_name))
-                pass
+        if path is None:
+            return sections
+
+        url = "http://archive.org/metadata/{}/files".format(ia_id)
+        response = requests.get(url)
+        _json = json.loads(response.content)
+        results = _json['result']
+
+        default_section_number = 0
+        for result in results:
+            if result['name'].endswith('_64kb.mp3'):
+                file_name = result['name']
+                # section name
+                if not result['title'] is None:
+                    section_name = result['title']
+                else:
+                    section_name = file_name
+                # section url
+                abs_url = "http://{}{}/{}".format(path['server'], path['dir'],
+                                                  file_name)
+
+                # extract section number from name
+                # Examples:
+                # 11 - Chapter XI: The Tweedles
+                # 01 - Chapter I: Peggy the Pig
+                # Chater 1: - Chapter XI: The Tweedles
+                # Chapters 1:- Chapter I: Peggy the Pig
+                match = section_num_pattern.match(section_name)
+                if match is None:
+                    match = chapter_num_pattern.match(section_name)
+                    if match is None:
+                        match = chapters_num_pattern.match(section_name)
+                if match:
+                    sections[int(match.group(1))] = {
+                        'number': int(match.group(1)),
+                        'name': section_name,
+                        'url': abs_url.replace("http", "https")
+                    }
+                else:
+                    sections[str(default_section_number)] = {
+                        'number': default_section_number,
+                        'name': section_name,
+                        'url': abs_url.replace("http", "https")
+                    }
+                    default_section_number += 1
+    except JSONDecodeError as e:
+        print(e)
     return sections
-
 
 def normalize_authors(book):
     authors = []
@@ -174,41 +214,6 @@ def get_books(limit, offset):
         root = objectify.fromstring(response.content)
         return copy.deepcopy(root.books)
 
-
-workQ = Queue()
-resultQ = Queue()
-threads = []
-
-def worker():
-    while True:
-        book = workQ.get()
-        if book is None:
-            break
-        if book.language == 'English':
-            #print("Starting {} ".format(book.id))
-            ia_id = find_ia_id_from_title(book.title)
-            if ia_id is None:
-                log_msg("{} - {}".format(book.id, book.title), True)
-            else:
-                sections = get_sections(ia_id)
-                if len(sections) > 0:
-                    authors = normalize_authors(book)
-                    genres = normalize_genres(book)
-                    book_json = {
-                        'id': int(book.id),
-                        'title': str(book.title.text).lower(),
-                        'description': TAG_RE.sub('', str(book.description.text)),
-                        'num_sections': int(book.num_sections),
-                        'sections': sections,
-                        'authors': authors,
-                        'genres': genres,
-                        'totaltime': str(book.totaltime)
-                    }
-                    resultQ.put(json.dumps(book_json))
-                else:
-                    log_msg("{} - {}".format(book.id, book.title), True)
-        workQ.task_done()
-
 def get_start_offsets(total_books, limit_per_call, start_offset):
     offsets = [((limit_per_call * x) + start_offset) for x in
                     range(0, int(total_books / limit_per_call))]
@@ -218,10 +223,39 @@ def get_limits(total_books, limit_per_call):
     return [limit_per_call for _ in range(0, int(total_books / limit_per_call))]
 
 
-def debug_title_sections(title):
-    ia_id = find_ia_id_from_title(title)
+def debug_title_sections(id):
+    book = get_book_metadata(id)
+    ia_id = find_ia_id_from_title(book)
     sections = get_sections(ia_id)
     print(sections)
+
+def process(book):
+    print(book)
+    if book.language == 'English':
+        ia_id = find_ia_id_from_title(book)
+        if ia_id is None:
+            log_msg("{} - {}".format(book.id, book.title), True)
+        else:
+            sections = get_sections(ia_id)
+            if len(sections) > 0:
+                authors = normalize_authors(book)
+                genres = normalize_genres(book)
+                book_json = {
+                    'id': int(book.id),
+                    'title': str(book.title.text).lower(),
+                    'description': TAG_RE.sub('', str(book.description.text)),
+                    'num_sections': int(book.num_sections),
+                    'sections': sections,
+                    'authors': authors,
+                    'genres': genres,
+                    'totaltime': str(book.totaltime)
+                }
+                print("Returning {} ".format(json.dumps(book_json)))
+                log_msg("{} - {}".format(book.id, book.title), False)
+                return json.dumps(book_json)
+            else:
+                log_msg("{} - {}".format(book.id, book.title), True)
+                raise Exception("Error processing book {} ".format(book.id))
 
 def init():
     import os
@@ -259,13 +293,16 @@ if __name__ == '__main__':
                                          'upload to s3', action='store_true')
 
     parsed_args = parser.parse_args()
-
-    # debug_title_sections('Odyssey')
-    # debug_title_sections('Canterville Ghost')
-    # debug_title_sections('Uncle Tom\'s Cabin')
-    # debug_title_sections('Adventures of Huckleberry Finn')
-
     print(parsed_args)
+
+    # debug_title_sections('Book of Tea')
+    #debug_title_sections('Canterville Ghost')
+    #debug_title_sections('Emma')
+    #debug_title_sections(230)
+
+    # ia_id = get_ia_id_from_book_id(86)
+    # sections = get_sections(ia_id)
+    # print(sections)
 
     # limit is fixed
     limit = parsed_args.limit
@@ -276,47 +313,46 @@ if __name__ == '__main__':
     # process in batches of 10
     offsets = get_start_offsets(total_books, limit, offset)
     limits = get_limits(total_books, limit)
-    for offset_limit in zip(offsets, limits):
-        workQ = Queue()
-        resultQ = Queue()
-        threads = []
 
+    from concurrent import futures
+    pool = futures.ThreadPoolExecutor(max_workers=num_threads)
+
+    books_json = ''
+    for offset_limit in zip(offsets, limits):
         offset = offset_limit[0]
         limit = offset_limit[1]
-
         print("Starting processing offset {} (limit {})".format(offset, limit))
 
         # get books
         books = get_books(limit, offset)
 
-        for i in range(num_threads):
-            t = threading.Thread(target=worker)
-            t.start()
-            threads.append(t)
-
+        # process all books
+        all_futures = []
         for book in books.getchildren():
-            log_msg("{} - {}".format(book.id, book.title), False)
-            workQ.put(book)
+            future = pool.submit(process, book)
+            all_futures.append(future)
 
-        # block until all done
-        workQ.join()
-
-        # stop workers
-        for i in range(num_threads):
-            workQ.put(None)
-        for t in threads:
-            t.join()
-
-        books_json = ''
-        while not resultQ.empty():
-            books_json += resultQ.get() + '\n'
-        books_json = books_json.rstrip()
-
-        if not parsed_args.dryrun:
-            print("Writing to S3")
-            exporter.export(books_json)
-        else:
-            with io.open("books{}.json".format(offset), 'w') as f:
-                f.write(books_json)
+        print('Number of futures submitted {}'.format(len(all_futures)))
+        for f in all_futures:
+            try:
+                if f.result() is not None:
+                    books_json += f.result() + '\n'
+                else:
+                    print("Process task returned None")
+            except Exception as exc:
+                print(exc)
 
         log_status("Completed processing offset {} (limit {})".format(offset, limit))
+
+    books_json = books_json.rstrip()
+
+    if not parsed_args.dryrun:
+        print("Writing to S3")
+        exporter.export(books_json)
+    else:
+        with io.open("books{}.json".format(offset), 'w') as f:
+            f.write(books_json)
+
+
+    # shutdown pool
+    pool.shutdown()
