@@ -115,7 +115,6 @@ def execute_s3_select_query(query: str):
         if 'Records' in event:
             records = event['Records']['Payload'].decode('utf-8')
             for record in records.rsplit("|")[:-1]:
-                print(record)
                 yield json.loads(record)
 
 def query_by_title(title):
@@ -128,8 +127,20 @@ def get_book_by_title(title):
                                    "from s3object t "
                                    "where t.title LIKE '%{}%'".format(title))
 
+def query_by_genres(genre):
+    return execute_s3_select_query("select t.title "
+                                   "from s3object t "
+                                        "where t.genres[0] LIKE '%{}%' "
+                                        "OR t.genres[1] LIKE '%{}%'"
+                                        "OR t.genres[2] LIKE '%{}%'"
+                                   .format(genre, genre, genre))
+
 if __name__ == '__main__':
-    print("Running queries")
-    recs = query_by_title('secret garden')
+    # print("Running queries")
+    # recs = query_by_title('secret garden')
+    # for rec in recs:
+    #     print(rec)
+
+    recs = query_by_genres('drama')
     for rec in recs:
         print(rec)

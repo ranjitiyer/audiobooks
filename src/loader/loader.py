@@ -36,6 +36,9 @@ chapters_num_pattern = re.compile(CHAPTER_NUMBER)
 
 exporter = S3Exporter()
 
+authors_set = set()
+genres_set = set()
+
 def log_msg(msg: str, error: bool):
     file_name = 'info.log'
     if error:
@@ -195,6 +198,8 @@ def normalize_authors(book):
             full_name += author['last_name']
         # add full name
         authors.append(full_name.lower())
+        # add it to our global list
+        authors_set.add(full_name.lower())
     return authors
 
 # TODO
@@ -203,6 +208,8 @@ def normalize_genres(book):
     for genre in book.genres.getchildren():
         if genre['name']:
             genres.append(str(genre['name']).lower())
+            # add it to the global list
+            genres_set.add(str(genre['name']).lower())
     return genres
 
 
@@ -291,18 +298,8 @@ if __name__ == '__main__':
                                           'processing', type=int, default=2)
     parser.add_argument('--dryrun', help='write to local file, don\'t '
                                          'upload to s3', action='store_true')
-
     parsed_args = parser.parse_args()
     print(parsed_args)
-
-    # debug_title_sections('Book of Tea')
-    #debug_title_sections('Canterville Ghost')
-    #debug_title_sections('Emma')
-    #debug_title_sections(230)
-
-    # ia_id = get_ia_id_from_book_id(86)
-    # sections = get_sections(ia_id)
-    # print(sections)
 
     # limit is fixed
     limit = parsed_args.limit
@@ -347,12 +344,17 @@ if __name__ == '__main__':
     books_json = books_json.rstrip()
 
     if not parsed_args.dryrun:
-        print("Writing to S3")
-        exporter.export(books_json)
+        print("Writing books to S3 ")
+        exporter.export_books(books_json)
+
+        print("Writing authors to S3 ")
+        exporter.export_authors(json.dumps({'authors': list(authors_set)}))
+
+        print("Writing genres to S3 ")
+        exporter.export_genres(json.dumps({'genres': list(genres_set)}))
     else:
         with io.open("books{}.json".format(offset), 'w') as f:
             f.write(books_json)
-
 
     # shutdown pool
     pool.shutdown()
