@@ -76,7 +76,7 @@ class PlayTitleIntent(AbstractRequestHandler):
         slots = handler_input.request_envelope.request.intent.slots
         if 'title' in slots:
             slot: Slot = slots['title']
-            title = slot.value
+            title = slot.value.lower()
 
             # set title attribute
             set_attribute(handler_input, 'title', title)

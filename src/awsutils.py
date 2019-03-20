@@ -3,6 +3,8 @@ import json
 
 BUCKET='librivox-db'
 KEY='books.json'
+AUTHORS='authors.json'
+GENRES='genres.json'
 
 #dev = boto3.session.Session(profile_name='ranjitiyer')
 
@@ -127,13 +129,50 @@ def get_book_by_title(title):
                                    "from s3object t "
                                    "where t.title LIKE '%{}%'".format(title))
 
-def query_by_genres(genre):
+def query_by_genre(genre):
     return execute_s3_select_query("select t.title "
                                    "from s3object t "
                                         "where t.genres[0] LIKE '%{}%' "
-                                        "OR t.genres[1] LIKE '%{}%'"
+                                        "OR t.genres[1] LIKE '%{}%' "
                                         "OR t.genres[2] LIKE '%{}%'"
                                    .format(genre, genre, genre))
+
+def query_by_author(author):
+    return execute_s3_select_query("select t.title "
+                                   "from s3object t "
+                                        "where t.authors[0] LIKE '%{}%' "
+                                        "OR t.authors[1] LIKE '%{}%' "
+                                   .format(author, author))
+
+def get_all_authors():
+    r = s3.select_object_content(Bucket=BUCKET,
+            Key=AUTHORS,
+            ExpressionType='SQL',
+            Expression="select * from s3object",
+            InputSerialization = {'JSON': {"Type": "LINES"}},
+            OutputSerialization = {'JSON': {"RecordDelimiter": "|"}},
+    )
+
+    for event in r['Payload']:
+        if 'Records' in event:
+            records = event['Records']['Payload'].decode('utf-8')
+            for record in records.rsplit("|")[:-1]:
+                return json.loads(record)['authors']
+
+def get_all_genres():
+    r = s3.select_object_content(Bucket=BUCKET,
+            Key=GENRES,
+            ExpressionType='SQL',
+            Expression="select * from s3object",
+            InputSerialization = {'JSON': {"Type": "LINES"}},
+            OutputSerialization = {'JSON': {"RecordDelimiter": "|"}},
+    )
+
+    for event in r['Payload']:
+        if 'Records' in event:
+            records = event['Records']['Payload'].decode('utf-8')
+            for record in records.rsplit("|")[:-1]:
+                return json.loads(record)['genres']
 
 if __name__ == '__main__':
     # print("Running queries")
@@ -141,6 +180,18 @@ if __name__ == '__main__':
     # for rec in recs:
     #     print(rec)
 
-    recs = query_by_genres('drama')
+    # recs = query_by_genre('poetry')
+    # for rec in recs:
+    #     print(rec)
+
+    recs = get_all_genres()
     for rec in recs:
         print(rec)
+        # for item in rec['genres']:
+        #     print(item)
+
+    # for rec in query_by_author('james'):
+    #     print(rec)
+    #
+    # recs = get_all_authors()
+    # print(recs)
